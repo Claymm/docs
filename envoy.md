@@ -1,192 +1,178 @@
 # Envoy Task Runner
 
 - [Introduction](#introduction)
-- [Installation](#envoy-installation)
-- [Running Tasks](#envoy-running-tasks)
-- [Multiple Servers](#envoy-multiple-servers)
-- [Parallel Execution](#envoy-parallel-execution)
-- [Task Macros](#envoy-task-macros)
-- [Notifications](#envoy-notifications)
-- [Updating Envoy](#envoy-updating-envoy)
+    - [Installation](#installation)
+- [Writing Tasks](#writing-tasks)
+    - [Setup](#setup)
+    - [Variables](#variables)
+    - [Stories](#stories)
+    - [Multiple Servers](#multiple-servers)
+- [Running Tasks](#running-tasks)
+    - [Confirming Task Execution](#confirming-task-execution)
+- [Notifications](#notifications)
+    - [Slack](#slack)
 
 <a name="introduction"></a>
 ## Introduction
 
-[Laravel Envoy](https://github.com/laravel/envoy) provides a clean, minimal syntax for defining common tasks you run on your remote servers. Using a Blade style syntax, you can easily setup tasks for deployment, Artisan commands, and more.
+[Laravel Envoy](https://github.com/laravel/envoy) provides a clean, minimal syntax for defining common tasks you run on your remote servers. Using Blade style syntax, you can easily setup tasks for deployment, Artisan commands, and more. Currently, Envoy only supports the Mac and Linux operating systems.
 
-> **Note:** Envoy requires PHP version 5.4 or greater, and only runs on Mac / Linux operating systems.
+<a name="installation"></a>
+### Installation
 
-<a name="envoy-installation"></a>
-## Installation
+First, install Envoy using the Composer `global require` command:
 
-First, install Envoy using the Composer `global` command:
+    composer global require laravel/envoy
 
-	composer global require "laravel/envoy=~1.0"
+Since global Composer libraries can sometimes cause package version conflicts, you may wish to consider using `cgr`, which is a drop-in replacement for the `composer global require` command. The `cgr` library's installation instructions can be [found on GitHub](https://github.com/consolidation-org/cgr).
 
-Make sure to place the `~/.composer/vendor/bin` directory in your PATH so the `envoy` executable is found when you run the `envoy` command in your terminal.
+> {note} Make sure to place the `~/.composer/vendor/bin` directory in your PATH so the `envoy` executable is found when running the `envoy` command in your terminal.
 
-Next, create an `Envoy.blade.php` file in the root of your project. Here's an example to get you started:
+#### Updating Envoy
 
-	@servers(['web' => '192.168.1.1'])
+You may also use Composer to keep your Envoy installation up to date. Issuing the `composer global update` command will update all of your globally installed Composer packages:
 
-	@task('foo', ['on' => 'web'])
-		ls -la
-	@endtask
+    composer global update
 
-As you can see, an array of `@servers` is defined at the top of the file. You can reference these servers in the `on` option of your task declarations. Within your `@task` declarations you should place the Bash code that will be run on your server when the task is executed.
+<a name="writing-tasks"></a>
+## Writing Tasks
 
-The `init` command may be used to easily create a stub Envoy file:
+All of your Envoy tasks should be defined in an `Envoy.blade.php` file in the root of your project. Here's an example to get you started:
 
-	envoy init user@192.168.1.1
+    @servers(['web' => ['user@192.168.1.1']])
 
-<a name="envoy-running-tasks"></a>
+    @task('foo', ['on' => 'web'])
+        ls -la
+    @endtask
+
+As you can see, an array of `@servers` is defined at the top of the file, allowing you to reference these servers in the `on` option of your task declarations. Within your `@task` declarations, you should place the Bash code that should run on your server when the task is executed.
+
+You can force a script to run locally by specifying the server's IP address as `127.0.0.1`:
+
+    @servers(['localhost' => '127.0.0.1'])
+
+<a name="setup"></a>
+### Setup
+
+Sometimes, you may need to execute some PHP code before executing your Envoy tasks. You may use the ```@setup``` directive to declare variables and do other general PHP work before any of your other tasks are executed:
+
+    @setup
+        $now = new DateTime();
+
+        $environment = isset($env) ? $env : "testing";
+    @endsetup
+
+If you need to require other PHP files before your task is executed, you may use the `@include` directive at the top of your `Envoy.blade.php` file:
+
+    @include('vendor/autoload.php')
+
+    @task('foo')
+        # ...
+    @endtask
+
+<a name="variables"></a>
+### Variables
+
+If needed, you may pass option values into Envoy tasks using the command line:
+
+    envoy run deploy --branch=master
+
+You may access the options in your tasks via Blade's "echo" syntax. Of course, you may also use `if` statements and loops within your tasks. For example, let's verify the presence of the `$branch` variable before executing the `git pull` command:
+
+    @servers(['web' => '192.168.1.1'])
+
+    @task('deploy', ['on' => 'web'])
+        cd site
+
+        @if ($branch)
+            git pull origin {{ $branch }}
+        @endif
+
+        php artisan migrate
+    @endtask
+
+<a name="stories"></a>
+### Stories
+
+Stories group a set of tasks under a single, convenient name, allowing you to group small, focused tasks into large tasks. For instance, a `deploy` story may run the `git` and `composer` tasks by listing the task names within its definition:
+
+    @servers(['web' => '192.168.1.1'])
+
+    @story('deploy')
+        git
+        composer
+    @endstory
+
+    @task('git')
+        git pull origin master
+    @endtask
+
+    @task('composer')
+        composer install
+    @endtask
+
+Once the story has been written, you may run it just like a typical task:
+
+    envoy run deploy
+
+<a name="multiple-servers"></a>
+### Multiple Servers
+
+Envoy allows you to easily run a task across multiple servers. First, add additional servers to your `@servers` declaration. Each server should be assigned a unique name. Once you have defined your additional servers, list each of the servers in the task's `on` array:
+
+    @servers(['web-1' => '192.168.1.1', 'web-2' => '192.168.1.2'])
+
+    @task('deploy', ['on' => ['web-1', 'web-2']])
+        cd site
+        git pull origin {{ $branch }}
+        php artisan migrate
+    @endtask
+
+#### Parallel Execution
+
+By default, tasks will be executed on each server serially. In other words, a task will finish running on the first server before proceeding to execute on the second server. If you would like to run a task across multiple servers in parallel, add the `parallel` option to your task declaration:
+
+    @servers(['web-1' => '192.168.1.1', 'web-2' => '192.168.1.2'])
+
+    @task('deploy', ['on' => ['web-1', 'web-2'], 'parallel' => true])
+        cd site
+        git pull origin {{ $branch }}
+        php artisan migrate
+    @endtask
+
+<a name="running-tasks"></a>
 ## Running Tasks
 
-To run a task, use the `run` command of your Envoy installation:
+To run a task or story that is defined in your `Envoy.blade.php` file, execute Envoy's `run` command, passing the name of the task or story you would like to execute. Envoy will run the task and display the output from the servers as the task is running:
 
-	envoy run foo
+    envoy run task
 
-If needed, you may pass variables into the Envoy file using command line switches:
+<a name="confirming-task-execution"></a>
+### Confirming Task Execution
 
-	envoy run deploy --branch=master
+If you would like to be prompted for confirmation before running a given task on your servers, you should add the `confirm` directive to your task declaration. This option is particularly useful for destructive operations:
 
-You may use the options via the Blade syntax you are used to:
+    @task('deploy', ['on' => 'web', 'confirm' => true])
+        cd site
+        git pull origin {{ $branch }}
+        php artisan migrate
+    @endtask
 
-	@servers(['web' => '192.168.1.1'])
-
-	@task('deploy', ['on' => 'web'])
-		cd site
-		git pull origin {{ $branch }}
-		php artisan migrate
-	@endtask
-
-#### Bootstrapping
-
-You may use the ```@setup``` directive to declare variables and do general PHP work inside the Envoy file:
-
-	@setup
-		$now = new DateTime();
-
-		$environment = isset($env) ? $env : "testing";
-	@endsetup
-
-You may also use ```@include``` to include any PHP files:
-
-	@include('vendor/autoload.php');
-
-#### Confirming Tasks Before Running
-
-If you would like to be prompted for confirmation before running a given task on your servers, you may use the `confirm` directive:
-
-	@task('deploy', ['on' => 'web', 'confirm' => true])
-		cd site
-		git pull origin {{ $branch }}
-		php artisan migrate
-	@endtask
-
-<a name="envoy-multiple-servers"></a>
-## Multiple Servers
-
-You may easily run a task across multiple servers. Simply list the servers in the task declaration:
-
-	@servers(['web-1' => '192.168.1.1', 'web-2' => '192.168.1.2'])
-
-	@task('deploy', ['on' => ['web-1', 'web-2']])
-		cd site
-		git pull origin {{ $branch }}
-		php artisan migrate
-	@endtask
-
-By default, the task will be executed on each server serially. Meaning, the task will finish running on the first server before proceeding to execute on the next server.
-
-<a name="envoy-parallel-execution"></a>
-## Parallel Execution
-
-If you would like to run a task across multiple servers in parallel, simply add the `parallel` option to your task declaration:
-
-	@servers(['web-1' => '192.168.1.1', 'web-2' => '192.168.1.2'])
-
-	@task('deploy', ['on' => ['web-1', 'web-2'], 'parallel' => true])
-		cd site
-		git pull origin {{ $branch }}
-		php artisan migrate
-	@endtask
-
-<a name="envoy-task-macros"></a>
-## Task Macros
-
-Macros allow you to define a set of tasks to be run in sequence using a single command. For instance:
-
-	@servers(['web' => '192.168.1.1'])
-
-	@macro('deploy')
-		foo
-		bar
-	@endmacro
-
-	@task('foo')
-		echo "HELLO"
-	@endtask
-
-	@task('bar')
-		echo "WORLD"
-	@endtask
-
-The `deploy` macro can now be run via a single, simple command:
-
-	envoy run deploy
-
-<a name="envoy-notifications"></a>
-<a name="envoy-hipchat-notifications"></a>
+<a name="notifications"></a>
 ## Notifications
 
-#### HipChat
+<a name="slack"></a>
+### Slack
 
-After running a task, you may send a notification to your team's HipChat room using the simple `@hipchat` directive:
+Envoy also supports sending notifications to [Slack](https://slack.com) after each task is executed. The `@slack` directive accepts a Slack hook URL and a channel name. You may retrieve your webhook URL by creating an "Incoming WebHooks" integration in your Slack control panel. You should pass the entire webhook URL into the `@slack` directive:
 
-	@servers(['web' => '192.168.1.1'])
+    @finished
+        @slack('webhook-url', '#bots')
+    @endfinished
 
-	@task('foo', ['on' => 'web'])
-		ls -la
-	@endtask
+You may provide one of the following as the channel argument:
 
-	@after
-		@hipchat('token', 'room', 'Envoy')
-	@endafter
-
-You can also specify a custom message to the hipchat room. Any variables declared in ```@setup``` or included with ```@include``` will be available for use in the message:
-
-	@after
-		@hipchat('token', 'room', 'Envoy', "$task ran on [$environment]")
-	@endafter
-
-This is an amazingly simple way to keep your team notified of the tasks being run on the server.
-
-#### Slack
-
-The following syntax may be used to send a notification to [Slack](https://slack.com):
-
-	@after
-		@slack('hook', 'channel', 'message')
-	@endafter
-
-You may retrieve your webhook URL by creating an `Incoming WebHooks` integration on Slack's website. The `hook` argument should be the entire webhook URL provided by the Incoming Webhooks Slack Integration. For example:
-
-	https://hooks.slack.com/services/ZZZZZZZZZ/YYYYYYYYY/XXXXXXXXXXXXXXX
-
-You may provide one of the following for the channel argument:
-
+<div class="content-list" markdown="1">
 - To send the notification to a channel: `#channel`
 - To send the notification to a user: `@user`
-
-If no `channel` argument is provided the default channel will be used.
-
-> Note: Slack notifications will only be sent if all tasks complete successfully.
-
-<a name="envoy-updating-envoy"></a>
-## Updating Envoy
-
-To update Envoy, simply use Composer:
-
-	composer global update
-
+</div>
